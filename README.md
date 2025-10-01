@@ -17,6 +17,12 @@ Bring your economy to life with player-owned businesses that add depth, roleplay
 
 ---
 
+## 🎥 Preview
+
+[▶ Watch Preview on Streamable](https://streamable.com/nzojk9)
+
+---
+
 ## ⚙️ Installation & Setup
 
 1. Place this resource into your `resources` folder  
