@@ -7,12 +7,12 @@ local function Notify(source, typ, description)
 end
 local QBX = exports['qb-core']:GetCoreObject()
 
-local function GetPlayerLicenseIdentifier(playerId)
-    local license = QBX.Functions.GetIdentifier(playerId, 'license2')
-    if not license or license == '' then
-        license = QBX.Functions.GetIdentifier(playerId, 'license')
+local function GetPlayerCitizenId(playerId)
+    local player = QBX.Functions.GetPlayer(playerId)
+    if player and player.PlayerData and player.PlayerData.citizenid then
+        return player.PlayerData.citizenid
     end
-    return license
+    return nil
 end
 
 local function GetPlayerNameSafe(playerId)
@@ -35,6 +35,20 @@ local function SendDiscordLog(key, description, fields)
         timestamp = os.date('!%Y-%m-%dT%H:%M:%SZ')
     }
     PerformHttpRequest(cfg.url, function() end, 'POST', json.encode({ embeds = { embed } }), { ['Content-Type'] = 'application/json' })
+end
+
+local playerThrottle = {}
+local function IsThrottled(source, actionKey, cooldownMs)
+    local now = GetGameTimer()
+    local pid = tostring(source)
+    local cd = cooldownMs or 1500
+    if not playerThrottle[pid] then playerThrottle[pid] = {} end
+    local untilTime = playerThrottle[pid][actionKey]
+    if untilTime and untilTime > now then
+        return true
+    end
+    playerThrottle[pid][actionKey] = now + cd
+    return false
 end
 
 local function IsItemBlacklisted(itemName)
@@ -90,11 +104,11 @@ MySQL.ready(function()
         CREATE TABLE IF NOT EXISTS `player_shops` (
             `id` INT AUTO_INCREMENT PRIMARY KEY,
             `shop_id` VARCHAR(50) NOT NULL,
-            `owner_license` VARCHAR(50) NOT NULL,
+            `owner_citizenid` VARCHAR(50) NOT NULL,
             `money` INT DEFAULT 0,
             `items` JSON DEFAULT '[]',
             `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            INDEX `idx_owner` (`owner_license`),
+            INDEX `idx_owner` (`owner_citizenid`),
             INDEX `idx_shop` (`shop_id`)
         ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ]])
@@ -107,10 +121,10 @@ MySQL.ready(function()
             `amount` INT NOT NULL,
             `price` INT NOT NULL,
             `type` ENUM('buy', 'sell') NOT NULL,
-            `buyer_license` VARCHAR(50) NOT NULL,
+            `buyer_citizenid` VARCHAR(50) NOT NULL,
             `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX `idx_shop_trans` (`shop_id`),
-            INDEX `idx_buyer` (`buyer_license`)
+            INDEX `idx_buyer` (`buyer_citizenid`)
         ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ]])
 
@@ -188,9 +202,9 @@ lib.addCommand('giveshop', {
         return
     end
 
-    local license = GetPlayerLicenseIdentifier(target)
+    local citizenid = GetPlayerCitizenId(target)
     
-    MySQL.query('SELECT COUNT(*) as c FROM player_shops WHERE owner_license = ?', {license}, function(result)
+    MySQL.query('SELECT COUNT(*) as c FROM player_shops WHERE owner_citizenid = ?', {citizenid}, function(result)
         local ownedCount = (result and result[1] and result[1].c) or 0
         local maxAllowed = Config.MaxOwnedShops or 1
         if ownedCount >= maxAllowed then
@@ -198,8 +212,8 @@ lib.addCommand('giveshop', {
             return
         end
 
-        MySQL.insert('INSERT INTO player_shops (shop_id, owner_license) VALUES (?, ?)', {
-            shopId, license
+        MySQL.insert('INSERT INTO player_shops (shop_id, owner_citizenid) VALUES (?, ?)', {
+            shopId, citizenid
         }, function()
             Notify(target, 'success', 'You received ownership of a shop!')
             Notify(source, 'success', 'Shop given to player')
@@ -211,7 +225,7 @@ lib.addCommand('giveshop', {
             SendDiscordLog('shop_purchase', ('%s gave shop %s to %s'):format(GetPlayerNameSafe(source), shopId, GetPlayerNameSafe(target)), {
                 { name = 'Admin', value = GetPlayerNameSafe(source), inline = true },
                 { name = 'Target', value = GetPlayerNameSafe(target), inline = true },
-                { name = 'Target License', value = license or 'unknown', inline = true },
+                { name = 'Target CitizenID', value = citizenid or 'unknown', inline = true },
                 { name = 'Shop ID', value = shopId, inline = true }
             })
         end)
@@ -219,12 +233,13 @@ lib.addCommand('giveshop', {
 end)
 
 lib.callback.register('rm-ownableshops:server:buyShop', function(source, shopId)
+    if IsThrottled(source, 'buyShop', 3000) then return false end
     local Player = QBX.Functions.GetPlayer(source)
     if not Player then return false end
 
-    local license = GetPlayerLicenseIdentifier(source)
+    local citizenid = GetPlayerCitizenId(source)
     
-    local ownedRow = MySQL.query.await('SELECT COUNT(*) as c FROM player_shops WHERE owner_license = ?', {license})
+    local ownedRow = MySQL.query.await('SELECT COUNT(*) as c FROM player_shops WHERE owner_citizenid = ?', {citizenid})
     local ownedCount = (ownedRow and ownedRow[1] and ownedRow[1].c) or 0
     local maxAllowed = Config.MaxOwnedShops or 1
     if ownedCount >= maxAllowed then
@@ -265,7 +280,7 @@ lib.callback.register('rm-ownableshops:server:buyShop', function(source, shopId)
     
     SendDiscordLog('shop_purchase', ('%s purchased shop %s for $%s'):format(GetPlayerNameSafe(source), shopId, shop.price), {
         { name = 'Player', value = GetPlayerNameSafe(source), inline = true },
-        { name = 'License', value = license or 'unknown', inline = true },
+        { name = 'CitizenID', value = citizenid or 'unknown', inline = true },
         { name = 'Shop ID', value = shopId, inline = true },
         { name = 'Price', value = tostring(shop.price), inline = true }
     })
@@ -278,19 +293,19 @@ lib.callback.register('rm-ownableshops:server:getShopData', function(source, sho
         local result = MySQL.query.await('SELECT * FROM player_shops WHERE shop_id = ?', {shopId})
         return result and result[1] or nil
     else
-        local license = GetPlayerLicenseIdentifier(source)
-        local result = MySQL.query.await('SELECT * FROM player_shops WHERE owner_license = ?', {license})
+        local citizenid = GetPlayerCitizenId(source)
+        local result = MySQL.query.await('SELECT * FROM player_shops WHERE owner_citizenid = ?', {citizenid})
         return result and result[1] or nil
     end
 end)
 
 lib.callback.register('rm-ownableshops:server:getAllShopOwnership', function(source)
-    local result = MySQL.query.await('SELECT shop_id, owner_license FROM player_shops')
+    local result = MySQL.query.await('SELECT shop_id, owner_citizenid FROM player_shops')
     local ownership = {}
     
     if result then
         for _, shop in ipairs(result) do
-            ownership[shop.shop_id] = shop.owner_license
+            ownership[shop.shop_id] = shop.owner_citizenid
         end
     end
     
@@ -303,6 +318,7 @@ lib.callback.register('rm-ownableshops:server:getShopItems', function(source, sh
 end)
 
 lib.callback.register('rm-ownableshops:server:addItemToShop', function(source, data)
+    if IsThrottled(source, 'addItem', 1000) then return false end
     if Config.Debug then
         print("=== ADD ITEM TO SHOP DEBUG ===")
         print("Item name: " .. tostring(data.item))
@@ -315,7 +331,7 @@ lib.callback.register('rm-ownableshops:server:addItemToShop', function(source, d
     end
     
     local Player = QBX.Functions.GetPlayer(source)
-    local license = GetPlayerLicenseIdentifier(source)
+    local citizenid = GetPlayerCitizenId(source)
     
     local shop = MySQL.query.await('SELECT * FROM player_shops WHERE owner_license = ?', {license})
     if not shop or not shop[1] then return false end
@@ -423,12 +439,13 @@ lib.callback.register('rm-ownableshops:server:checkShopHasItems', function(sourc
 end)
 
 lib.callback.register('rm-ownableshops:server:collectMoney', function(source, shopId)
+    if IsThrottled(source, 'collect', 2000) then return false end
     local Player = QBX.Functions.GetPlayer(source)
     if not Player then return false end
 
-    local license = GetPlayerLicenseIdentifier(source)
+    local citizenid = GetPlayerCitizenId(source)
     
-    local shop = MySQL.query.await('SELECT * FROM player_shops WHERE shop_id = ? AND owner_license = ?', {shopId, license})
+    local shop = MySQL.query.await('SELECT * FROM player_shops WHERE shop_id = ? AND owner_citizenid = ?', {shopId, citizenid})
     if not shop or not shop[1] then return false end
     
     local money = shop[1].money
@@ -441,10 +458,11 @@ lib.callback.register('rm-ownableshops:server:collectMoney', function(source, sh
 end)
 
 lib.callback.register('rm-ownableshops:server:removeItemFromShop', function(source, data)
+    if IsThrottled(source, 'removeItem', 1000) then return false end
     local Player = QBX.Functions.GetPlayer(source)
-    local license = GetPlayerLicenseIdentifier(source)
+    local citizenid = GetPlayerCitizenId(source)
     
-    local shop = MySQL.query.await('SELECT * FROM player_shops WHERE owner_license = ?', {license})
+    local shop = MySQL.query.await('SELECT * FROM player_shops WHERE owner_citizenid = ?', {citizenid})
     if not shop or not shop[1] then return false end
     
     local items = json.decode(shop[1].items or '[]')
@@ -474,14 +492,12 @@ lib.callback.register('rm-ownableshops:server:removeItemFromShop', function(sour
             table.remove(items, itemIndex)
         end
         
-        MySQL.update('UPDATE player_shops SET items = ? WHERE owner_license = ?', {
-            json.encode(items), license
-        })
+    MySQL.update('UPDATE player_shops SET items = ? WHERE owner_citizenid = ?', { json.encode(items), citizenid })
 
         RegisterShopWithOxInventory(shop[1].shop_id, items)
         SendDiscordLog('item_transaction', ('%s removed %sx %s from shop %s'):format(GetPlayerNameSafe(source), tostring(data.amount), tostring(data.item), shop[1].shop_id), {
             { name = 'Player', value = GetPlayerNameSafe(source), inline = true },
-            { name = 'License', value = license or 'unknown', inline = true },
+        { name = 'CitizenID', value = citizenid or 'unknown', inline = true },
             { name = 'Shop ID', value = shop[1].shop_id or 'unknown', inline = true },
             { name = 'Item', value = tostring(data.item), inline = true },
             { name = 'Amount', value = tostring(data.amount), inline = true }
@@ -604,13 +620,13 @@ function SetupShopHooks()
                     
                     RegisterShopWithOxInventory(shopId, items)
                     
-                    local license = GetPlayerLicenseIdentifier(buyerSource)
-                    MySQL.insert('INSERT INTO shop_transactions (shop_id, item_name, amount, price, type, buyer_license) VALUES (?, ?, ?, ?, ?, ?)', {
-                        shopId, itemName, count, totalPrice, 'buy', license
+                    local citizenidBuyer = GetPlayerCitizenId(buyerSource)
+                    MySQL.insert('INSERT INTO shop_transactions (shop_id, item_name, amount, price, type, buyer_citizenid) VALUES (?, ?, ?, ?, ?, ?)', {
+                        shopId, itemName, count, totalPrice, 'buy', citizenidBuyer
                     })
                     SendDiscordLog('item_transaction', ('%s bought %sx %s from shop %s for $%s'):format(GetPlayerNameSafe(buyerSource), count, itemName, shopId, totalPrice), {
                         { name = 'Player', value = GetPlayerNameSafe(buyerSource), inline = true },
-                        { name = 'License', value = license or 'unknown', inline = true },
+                        { name = 'CitizenID', value = citizenidBuyer or 'unknown', inline = true },
                         { name = 'Shop ID', value = shopId, inline = true },
                         { name = 'Item', value = itemName, inline = true },
                         { name = 'Amount', value = tostring(count), inline = true },
@@ -650,20 +666,20 @@ end)
 lib.callback.register('rm-ownableshops:server:sellShop', function(source, shopId)
     local Player = QBX.Functions.GetPlayer(source)
     if not Player then return false end
-    local license = GetPlayerLicenseIdentifier(source)
+    local citizenid = GetPlayerCitizenId(source)
     local shop = Config.Shops[shopId]
     if not shop then return false end
-    local result = MySQL.query.await('SELECT * FROM player_shops WHERE shop_id = ? AND owner_license = ?', {shopId, license})
+    local result = MySQL.query.await('SELECT * FROM player_shops WHERE shop_id = ? AND owner_citizenid = ?', {shopId, citizenid})
     if not result or not result[1] then return false end
     local sellPercentage = Config.SellPercentage or 30
     local sellAmount = math.floor(shop.price * (sellPercentage / 100))
-    MySQL.query.await('DELETE FROM player_shops WHERE shop_id = ? AND owner_license = ?', {shopId, license})
+    MySQL.query.await('DELETE FROM player_shops WHERE shop_id = ? AND owner_citizenid = ?', {shopId, citizenid})
     Player.Functions.AddMoney('cash', sellAmount)
     TriggerClientEvent('rm-ownableshops:client:updateOwnership', source, nil)
     TriggerClientEvent('rm-ownableshops:client:refreshBlips', -1)
     SendDiscordLog('shop_sale', ('%s sold shop %s for $%s'):format(GetPlayerNameSafe(source), shopId, sellAmount), {
         { name = 'Player', value = GetPlayerNameSafe(source), inline = true },
-        { name = 'License', value = license or 'unknown', inline = true },
+        { name = 'CitizenID', value = citizenid or 'unknown', inline = true },
         { name = 'Shop ID', value = shopId, inline = true },
         { name = 'Amount', value = tostring(sellAmount), inline = true }
     })
