@@ -1,0 +1,36 @@
+{
+    "menu": {
+        "manage_shop": "Manage Shop",
+        "manage_items": "Manage Items",
+        "collect_money": "Collect Money",
+        "browse_shop": "Browse Shop",
+        "buy_shop": "Buy Shop ($%s)",
+        "add_items": "Add Items",
+        "remove_items": "Remove Items",
+        "confirm_purchase": "Confirm Purchase",
+        "shop_items": "Shop Items"
+    },
+    "descriptions": {
+        "add_items_desc": "Add items from your inventory to the shop",
+        "remove_items_desc": "Remove items from your shop",
+        "buy_shop_confirm": "Are you sure you want to buy this shop for $%s?",
+        "money_to_collect": "Available to collect: $%s"
+    },
+    "notifications": {
+        "success": "Success",
+        "error": "Error",
+        "shop_purchased": "You now own this shop!",
+        "no_items": "No items available in this shop",
+        "purchase_successful": "Purchase successful!",
+        "item_added": "Item added to shop!",
+        "no_items_to_add": "You have no items to add",
+        "money_collected": "You collected $%s from your shop!"
+    },
+    "inputs": {
+        "amount": "Amount",
+        "amount_desc": "How many do you want to buy?",
+        "price": "Price",
+        "price_desc": "Price per item",
+        "item": "Item"
+    }
+}
