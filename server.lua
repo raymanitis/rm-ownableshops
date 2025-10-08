@@ -266,7 +266,7 @@ lib.callback.register('rm-ownableshops:server:buyShop', function(source, shopId)
     
     Player.Functions.RemoveMoney('cash', shop.price)
     MySQL.insert('INSERT INTO player_shops (shop_id, owner_license) VALUES (?, ?)', {
-        shopId, license
+        shopId, citizenid
     })
 
     exports.ox_inventory:RegisterShop(shopId, {
@@ -333,7 +333,7 @@ lib.callback.register('rm-ownableshops:server:addItemToShop', function(source, d
     local Player = QBX.Functions.GetPlayer(source)
     local citizenid = GetPlayerCitizenId(source)
     
-    local shop = MySQL.query.await('SELECT * FROM player_shops WHERE owner_license = ?', {license})
+    local shop = MySQL.query.await('SELECT * FROM player_shops WHERE owner_license = ?', {citizenid})
     if not shop or not shop[1] then return false end
     
     local isBlacklisted = IsItemBlacklisted(data.item)
@@ -696,3 +696,4 @@ AddEventHandler('onResourceStop', function(resourceName)
         end
     end
 end)
+
